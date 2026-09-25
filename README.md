@@ -5,7 +5,7 @@
 | 任务   | 内容                           | 状态   |
 | ------ | ------------------------------ | ------ |
 | 任务 1 | 郁金香图像处理                 | 已完成 |
-| 任务 2 | 合成旋转视频参数拟合           | 待完成 |
+| 任务 2 | 合成旋转视频参数拟合           | 已完成 |
 | 任务 3 | 真实能量机关视频识别与稳定跟踪 | 待完成 |
 
 ---
@@ -18,10 +18,12 @@
 | 编译器   | g++ 11.4.0（C++17） |
 | 构建工具 | CMake 3.22.1        |
 | 图像库   | OpenCV 4.5.4        |
+| 矩阵库   | Eigen 3.4.0         |
+| 优化库   | Ceres Solver 2.0.0  |
 
 ```bash
 sudo apt update
-sudo apt install build-essential cmake libopencv-dev
+sudo apt install build-essential cmake libopencv-dev libeigen3-dev libceres-dev
 ```
 
 ## 2. 目录结构
@@ -30,7 +32,7 @@ sudo apt install build-essential cmake libopencv-dev
 第二次作业/
 ├── CMakeLists.txt                 # 根构建脚本
 ├── README.md                      # 本文件：环境、参数、分析与结果索引
-├── include/                       # 公共头文件（预留）
+├── include/                       # 公共头文件（任务 2、3 共用的绘图工具）
 ├── config/                        # 配置文件（预留）
 ├── resources/                     # 输入素材
 │   ├── test_image.jpg             # 任务 1 输入（1280×853）
@@ -39,10 +41,11 @@ sudo apt install build-essential cmake libopencv-dev
 │   └── task_4.mp4                 # 任务 3 输入
 ├── src/
 │   ├── task1_image/main.cpp       # 任务 1 源码
-│   ├── task2_fit/main.cpp         # 任务 2 源码（待完成）
+│   ├── task2_fit/main.cpp         # 任务 2 源码
 │   └── task3_windmill/main.cpp    # 任务 3 源码（待完成）
 └── result/
-    └── task1_images/              # 任务 1 的 16 张结果图
+    ├── task1_images/              # 任务 1 的 16 张结果图
+    └── task2_fit/                 # 任务 2 的标注视频与曲线图
 ```
 
 ## 3. 构建与运行
@@ -51,7 +54,8 @@ sudo apt install build-essential cmake libopencv-dev
 # 在工程根目录执行
 cmake -S . -B build
 cmake --build build -j4
-./build/task1_image
+./build/task1_image    # 任务 1
+./build/task2_fit      # 任务 2
 ```
 
 程序内部使用相对路径（`resources/...`、`result/task1_images/...`），**必须在工程根目录下运行**，否则读图和写图都会失败。`build/` 为构建产物，不入库。
@@ -193,8 +197,54 @@ cmake --build build -j4
 | `rotated_35deg.png`   | 5.5 变换     | 1280×853 | 绕图像中心旋转 35°                                      |
 | `crop_top_left.png`   | 5.5 变换     | 640×426  | 左上角 1/4 裁剪                                         |
 
-## 7. 可复现性
+## 7. 任务 2：合成旋转视频的参数拟合
 
-- 全部结果由第 3 节的命令从 `resources/test_image.jpg` 一次性生成，不依赖任何手工编辑。重复运行程序，16 张输出图逐字节一致。
-- 所有阈值、核尺寸、旋转角度等参数都写在 `src/task1_image/main.cpp` 中，并与本文档第 5 节的表格一一对应。
-- 注意：面积阈值 500 与长宽比范围 [0.2, 5.0] 都是与图像尺度相关的演示值（讲义亦说明应按目标尺度调整）。本工程使用的素材为 1280×853，若替换为分辨率不同的图片，需要按比例调整绘制坐标与面积阈值。
+完整说明见 `result/task2_fit_result.md`，这里只列关键结果。
+
+- 识别：HSV 阈值（H 80–105、S ≥ 80、V ≥ 80）取最大连通域质心，1440/1440 帧全部检出；
+  白点检测到的旋转中心为 (479.765, 359.765)，与已知中心 (480, 360) 相差 0.31 px；
+  目标到中心距离均值 219.975 px（理论 220）。
+- 角度：θ_wrapped = atan2(c_y − y, x − c_x) 后按相邻帧角差展开，展开区间 0.351952 → 33.265871 rad。
+- 拟合：两步法 —— 固定 Ω 时模型对 (c0, b, c2, c3) 线性，用 Eigen 列主元 QR 解最小二乘，
+  并对 Ω 做一维网格搜索（[0.05, 8] rad/s，2000 步 + 3 轮细化）得到初值；
+  再用 Ceres 自动求导对 (θ0, b, A, Ω, φ) 精修，并施加 A > 0、Ω > 0 下界。
+
+| 参数                | 估计值   | 单位  |
+| ------------------- | -------- | ----- |
+| A（角速度振幅）     | 0.549939 | rad/s |
+| b（平均角速度）     | 1.350026 | rad/s |
+| Ω（频率参数）       | 1.649870 | rad/s |
+| φ（相位，[−π, π)）  | 0.702857 | rad   |
+| θ0 = θ(0)           | 0.350298 | rad   |
+| T = 2π/Ω（变化周期） | 3.808291 | s     |
+
+- 约束核对：b − A = 0.800087 rad/s > 0，目标始终沿同一方向转动。
+- 误差：RMSE(θ) = 2.3465e-03 rad（max 5.5023e-03），有效样本 1440 帧、帧范围 [0, 1439]；
+  RMSE(ω) = 3.0550e-02 rad/s（max 1.0066e-01），由角度中心差分得到，样本 1438、帧范围 [1, 1438]。
+- 求解状态：Ceres 迭代 8 次，Initial cost = Final cost = 3.964365e-03，Termination = CONVERGENCE，可用解 yes。
+
+产出（`result/task2_fit/`）：
+
+| 文件                   | 说明                                                                                       |
+| ---------------------- | ------------------------------------------------------------------------------------------ |
+| `tracking_overlay.mp4` | 原视频叠加中心、目标轮廓与质心、连线、实时角度与角速度，左下角同步显示 θ(t) 观测与拟合曲线 |
+| `fit_comparison.png`   | 展开角度的观测点与拟合曲线对比                                                             |
+| `angular_velocity.png` | 中心差分角速度与拟合模型 ω(t) 对比                                                         |
+| `residuals.png`        | 角度残差（观测 − 拟合）曲线                                                                |
+| `fit_report.txt`       | 程序自动输出的完整参数、误差与求解状态报告                                                 |
+
+## 8. 可复现性
+
+- 任务 1 的 16 张结果图由 `./build/task1_image` 从 `resources/test_image.jpg` 一次性生成，不依赖任何手工编辑；重复运行程序，输出逐字节一致。
+- 任务 2 的全部结果由 `./build/task2_fit` 从 `resources/task_2.mp4` 一次性生成，参数与误差同时写入 `result/task2_fit/fit_report.txt`，与本文档第 7 节及 `result/task2_fit_result.md` 的数值一致。
+- 所有阈值、核尺寸、旋转角度、拟合范围等参数都写在对应的 `src/task*/main.cpp` 中，并与本文档的表格一一对应。
+- 注意：任务 1 的面积阈值 500 与长宽比范围 [0.2, 5.0] 都是与图像尺度相关的演示值（讲义亦说明应按目标尺度调整）。本工程使用的素材为 1280×853，若替换为分辨率不同的图片，需要按比例调整绘制坐标与面积阈值。
+
+
+## 9. 待完成任务
+
+任务 3（`src/task3_windmill/`）尚未实现。根 `CMakeLists.txt` 已统一构建任务 1、任务 2 两个可执行目标，任务 3 完成后需要：
+
+1. 在根 `CMakeLists.txt` 中增加 `task3_windmill` 可执行目标，使同一程序能通过输入路径参数处理 `task_3.mp4` 与 `task_4.mp4`。
+2. 结果分别写入 `result/task3_windmill/task_3/` 与 `result/task3_windmill/task_4/`，每个视频一份覆盖完整时段的 `recognition_overlay.mp4`，保持原始帧数与帧率，可选提交 `binary_process.mp4`。
+3. 说明写入 `result/task3_tracking_result.md`，包含检测方法、锁定与重选规则、已知失败情况及两个结果视频的链接。
