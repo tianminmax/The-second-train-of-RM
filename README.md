@@ -6,7 +6,7 @@
 | ------ | ------------------------------ | ------ |
 | 任务 1 | 郁金香图像处理                 | 已完成 |
 | 任务 2 | 合成旋转视频参数拟合           | 已完成 |
-| 任务 3 | 真实能量机关视频识别与稳定跟踪 | 待完成 |
+| 任务 3 | 真实能量机关视频识别与稳定跟踪 | 已完成 |
 
 ---
 
@@ -42,10 +42,11 @@ sudo apt install build-essential cmake libopencv-dev libeigen3-dev libceres-dev
 ├── src/
 │   ├── task1_image/main.cpp       # 任务 1 源码
 │   ├── task2_fit/main.cpp         # 任务 2 源码
-│   └── task3_windmill/main.cpp    # 任务 3 源码（待完成）
+│   └── task3_windmill/main.cpp    # 任务 3 源码
 └── result/
     ├── task1_images/              # 任务 1 的 16 张结果图
-    └── task2_fit/                 # 任务 2 的标注视频与曲线图
+    ├── task2_fit/                 # 任务 2 的标注视频与曲线图
+    └── task3_windmill/            # 任务 3 的两个视频结果（task_3/ 与 task_4/）
 ```
 
 ## 3. 构建与运行
@@ -56,6 +57,7 @@ cmake -S . -B build
 cmake --build build -j4
 ./build/task1_image    # 任务 1
 ./build/task2_fit      # 任务 2
+./build/task3_windmill # 任务 3（默认依次处理 task_3.mp4 与 task_4.mp4）
 ```
 
 程序内部使用相对路径（`resources/...`、`result/task1_images/...`），**必须在工程根目录下运行**，否则读图和写图都会失败。`build/` 为构建产物，不入库。
@@ -233,18 +235,53 @@ cmake --build build -j4
 | `residuals.png`        | 角度残差（观测 − 拟合）曲线                                                                |
 | `fit_report.txt`       | 程序自动输出的完整参数、误差与求解状态报告                                                 |
 
-## 8. 可复现性
+## 8. 任务 3：真实能量机关视频的识别与稳定跟踪
+
+完整的方法、锁定与重选规则、失败情况见 `result/task3_tracking_result.md`，这里只列关键结果。
+
+场景对应关系与实际视频参数（由程序实际读取）：
+
+| 视频 | 场景 | 分辨率 | 帧率 | 帧数 | 时长 |
+| --- | --- | --- | --- | --- | --- |
+| `resources/task_3.mp4` | 小能量机关（同时最多亮 1 个目标） | 1440×1080 | 30 FPS | 796 | 26.53 s |
+| `resources/task_4.mp4` | 大能量机关（同时最多亮 2 个目标） | 1440×1080 | 30 FPS | 1800 | 60.00 s |
+
+- 检测：暖色掩膜（H 0–45 或 165–179、S ≥ 90、V ≥ 25）的亮度加权质心作为 R 标中心，逐帧更新并做时序平滑；灯珠掩膜（H 0–35 或 165–179、S ≥ 140、V ≥ 150）经闭运算合并同一扇叶的灯珠，再用 `minEnclosingCircle` 拟合扇叶圆（圆心 + 半径）。
+- 跟踪：候选目标与锁定目标按「上一帧圆心 + 匀速外推」关联，门限 `min(110 + 0.6·r, 200)` px，只有落在门限内的候选才继承原 ID，不用轮廓列表顺序编号；丢失容忍 30 帧（1.0 s），超时后重选并分配新 ID。
+- 结果：task_3 有效观测 756/796（95.0%），重选 1 次，共 2 个 ID；task_4 有效观测 1527/1800（84.8%），重选 4 次，共 5 个 ID。输出视频与输入完全对齐（帧数、帧率、分辨率一致），丢失帧原样保留并标注状态。
+
+产出（`result/task3_windmill/`）：
+
+| 文件 | 说明 |
+| --- | --- |
+| `task_3/recognition_overlay.mp4` | 小能量机关完整标注视频（796 帧） |
+| `task_3/binary_process.mp4` | 小能量机关中间二值化过程 |
+| `task_4/recognition_overlay.mp4` | 大能量机关完整标注视频（1800 帧） |
+| `task_4/binary_process.mp4` | 大能量机关中间二值化过程 |
+
+每个输出目录下另有 `tracking_report.txt`，记录帧数、有效观测帧、丢失帧、重选次数与全部参数。
+
+## 9. 可复现性
 
 - 任务 1 的 16 张结果图由 `./build/task1_image` 从 `resources/test_image.jpg` 一次性生成，不依赖任何手工编辑；重复运行程序，输出逐字节一致。
 - 任务 2 的全部结果由 `./build/task2_fit` 从 `resources/task_2.mp4` 一次性生成，参数与误差同时写入 `result/task2_fit/fit_report.txt`，与本文档第 7 节及 `result/task2_fit_result.md` 的数值一致。
-- 所有阈值、核尺寸、旋转角度、拟合范围等参数都写在对应的 `src/task*/main.cpp` 中，并与本文档的表格一一对应。
+- 任务 3 的两个标注视频与二值化视频由 `./build/task3_windmill` 从 `resources/task_3.mp4`、`resources/task_4.mp4` 一次性生成，帧数、帧率与分辨率与输入完全一致，每个输出目录下另有 `tracking_report.txt`。
+- 所有阈值、核尺寸、旋转角度、拟合范围、跟踪门限等参数都写在对应的 `src/task*/main.cpp` 中，并与本文档的表格一一对应。
 - 注意：任务 1 的面积阈值 500 与长宽比范围 [0.2, 5.0] 都是与图像尺度相关的演示值（讲义亦说明应按目标尺度调整）。本工程使用的素材为 1280×853，若替换为分辨率不同的图片，需要按比例调整绘制坐标与面积阈值。
 
 
-## 9. 待完成任务
+## 10. 提交清单
 
-任务 3（`src/task3_windmill/`）尚未实现。根 `CMakeLists.txt` 已统一构建任务 1、任务 2 两个可执行目标，任务 3 完成后需要：
+| 材料 | 位置 | 状态 |
+| --- | --- | --- |
+| 工程源码 | `src/task1_image/`、`src/task2_fit/`、`src/task3_windmill/`、公共工具 `include/plot_utils.hpp` | 完成 |
+| 构建配置 | 根 `CMakeLists.txt`，统一构建三个可执行目标 | 完成 |
+| 输入素材 | `resources/`（`test_image.jpg`、`task_2.mp4`、`task_3.mp4`、`task_4.mp4`） | 完成 |
+| 任务 1 结果 | `result/task1_images/`（16 张图） | 完成 |
+| 任务 1 参数与分析 | 本 README 第 5、6 节 | 完成 |
+| 任务 2 结果 | `result/task2_fit/`（标注视频 + 三张曲线图） | 完成 |
+| 任务 2 说明 | `result/task2_fit_result.md` | 完成 |
+| 任务 3 结果 | `result/task3_windmill/task_3/`、`task_4/`（各一份完整标注视频与二值化视频） | 完成 |
+| 任务 3 说明 | `result/task3_tracking_result.md` | 完成 |
 
-1. 在根 `CMakeLists.txt` 中增加 `task3_windmill` 可执行目标，使同一程序能通过输入路径参数处理 `task_3.mp4` 与 `task_4.mp4`。
-2. 结果分别写入 `result/task3_windmill/task_3/` 与 `result/task3_windmill/task_4/`，每个视频一份覆盖完整时段的 `recognition_overlay.mp4`，保持原始帧数与帧率，可选提交 `binary_process.mp4`。
-3. 说明写入 `result/task3_tracking_result.md`，包含检测方法、锁定与重选规则、已知失败情况及两个结果视频的链接。
+两个任务 2、任务 3 的输出视频体积较大（任务 3 两个视频合计约 106 MB），如果 GitHub 上传受限，可按讲义说明改用邮件附件提交。

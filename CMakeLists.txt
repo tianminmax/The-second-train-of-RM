@@ -29,3 +29,11 @@ target_link_libraries(task2_fit PRIVATE
     ${OpenCV_LIBS}
     Eigen3::Eigen
     Ceres::ceres)
+
+# ------------------ 任务 3：真实能量机关识别与稳定跟踪 ------------------
+# 同一程序通过输入路径参数处理 task_3.mp4 与 task_4.mp4
+add_executable(task3_windmill src/task3_windmill/main.cpp)
+target_include_directories(task3_windmill PRIVATE
+    ${OpenCV_INCLUDE_DIRS}
+    ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(task3_windmill PRIVATE ${OpenCV_LIBS})
