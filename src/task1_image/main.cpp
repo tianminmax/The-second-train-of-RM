@@ -80,22 +80,33 @@ int main() {
     cv::imwrite("result/task1_images/close.png", closed);
 
     // 用开运算后的结果找轮廓
+    //创建一个 线 集合
     std::vector<std::vector<cv::Point>> contours;
+    //找到轮廓
     cv::findContours(opened, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-
+    //深度拷贝防止污染原图
     cv::Mat contour_result = img.clone();
+
+    //遍历每条轮廓, contours.size() 是轮廓的数量
     for (size_t i = 0; i < contours.size(); ++i) {
+        //计算轮廓面积
         double area = cv::contourArea(contours[i]);
+        //如果面积小于 500，则跳过
         if (area < 500.0) continue;
-
+        //计算外接矩形, boundingRect(contours[i])能够返回能包住这条轮廓的最小正矩形，
+        //                              box.x, box.y, box.width, box.height
+        //因此直接使用Rect即可
         cv::Rect box = cv::boundingRect(contours[i]);
+        //计算宽高比
         double ratio = static_cast<double>(box.width) / box.height;
+        //如果宽高比小于 0.2 或大于 5.0，则跳过
         if (ratio < 0.2 || ratio > 5.0) continue;
-
+        //开始画框, 红色框, 2px 粗细
         cv::rectangle(contour_result, box, cv::Scalar(0, 0, 255), 2);
+        //开始画轮廓, 绿色, 2px 粗细
         cv::drawContours(contour_result, contours, static_cast<int>(i),
                          cv::Scalar(0, 255, 0), 2);
-
+        //打印轮廓信息
         std::cout << "轮廓 " << i << " 面积=" << area
                   << " 外接矩形=" << box << std::endl;
     }
